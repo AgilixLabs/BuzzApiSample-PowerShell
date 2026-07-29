@@ -1,0 +1,11 @@
+# OAuth private keys and generated config — never commit these
+private_key.pem
+public_key.pem
+*.pem
+buzz-config.psd1
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
