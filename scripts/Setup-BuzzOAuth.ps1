@@ -37,20 +37,29 @@ function Get-BuzzCreatedUserId {
     $inner = Get-BuzzProp $responses 'response'
     if ($inner -is [object[]]) { $inner = if ($inner.Count -gt 0) { $inner[0] } else { $null } }
     $user = Get-BuzzProp $inner 'user'
-    $id = Get-BuzzProp $user 'userid'; if (-not $id) { $id = Get-BuzzProp $user 'id' }
+    # The CreateUsers2 response documents this as "userid".
+    $id = Get-BuzzProp $user 'userid'
     return [string]$id
 }
 
 function Get-BuzzDomains {
     param([string]$Server, [string]$Token)
-    $resp = Invoke-BuzzCmdGet -Server $Server -Cmd 'getdomains' -Token $Token
+    # ListDomains, not "getdomains" -- the latter is not a Buzz command and always
+    # answered "Unknown API command", so this silently returned @() on every run.
+    # domainid=0 means "every domain this account has ReadDomain rights on"; limit=0
+    # lifts the default 100-domain cap (capped server-side at 1000 for domainid=0).
+    #   https://api.agilixbuzz.com/docs/entry/Command/ListDomains.md
+    $resp = Invoke-BuzzCmdGet -Server $Server -Cmd 'listdomains' -Params @{ domainid = 0; limit = 0 } -Token $Token
     if ((Get-BuzzResponseCode $resp) -ne 'OK') { return @() }
+    # When the account can read no domains the server answers OK with "domains":{},
+    # so every level has to tolerate a missing or empty node.
     $domains = Get-BuzzProp (Get-BuzzProp (Get-BuzzProp $resp 'response') 'domains') 'domain'
+    if ($null -eq $domains) { return @() }
     if ($domains -is [System.Management.Automation.PSCustomObject]) { $domains = @($domains) }
     $out = @()
     foreach ($d in $domains) {
-        $id = Get-BuzzProp $d 'id'; if (-not $id) { $id = Get-BuzzProp $d 'domainid' }
-        $out += , @([string]$id, [string](Get-BuzzProp $d 'name'))
+        # The Domain schema names the identifier "id"; "domainid" is what you *send*.
+        $out += , @([string](Get-BuzzProp $d 'id'), [string](Get-BuzzProp $d 'name'))
     }
     return $out
 }
@@ -80,7 +89,10 @@ function Get-BuzzOrCreateAccount {
             else { $targetDomain = $choice }
         }
         else {
-            Write-Host ' (could not fetch domains)'
+            # An empty list is normal when the admin holds no ReadDomain right anywhere,
+            # or when the domain simply has no child domains.  Not an error -- just ask.
+            Write-Host " done`n"
+            Write-Host '  No domains were listed for this account, so enter the target domain directly.'
             $targetDomain = Read-BuzzRequired -Label 'Domain id for the new account (e.g. //myschool or a numeric id)'
         }
     }
@@ -98,6 +110,17 @@ function Get-BuzzOrCreateAccount {
     if ((Get-BuzzResponseCode $resp) -ne 'OK') {
         Stop-Buzz ("CreateUsers2 failed (code: {0})." -f (Get-BuzzResponseCode $resp))
     }
+    # The outer OK only means the request parsed; CreateUsers2 reports the outcome for
+    # the user it created under responses.response, so a denial arrives inside an "OK"
+    # envelope and must be checked separately.
+    $item = Get-BuzzItemResult $resp
+    if ($item.code -and $item.code -ne 'OK') {
+        $detail = if ($item.message) { " - $($item.message)" } else { '' }
+        if ($item.code -eq 'AccessDenied') {
+            Stop-Buzz ("CreateUsers2 was denied (code: {0}{1}).`n  The admin account needs the CreateUser right on domain {2}.`n  Grant it that right (and UpdateUser, so it can register the OAuth key), then re-run." -f $item.code, $detail, $targetDomain)
+        }
+        Stop-Buzz ("CreateUsers2 failed for the requested user (code: {0}{1})." -f $item.code, $detail)
+    }
     $userId = Get-BuzzCreatedUserId $resp
     if (-not $userId) { Stop-Buzz 'CreateUsers2 succeeded but returned no userid.' }
     Write-Host (" OK (userid: {0})" -f $userId)
@@ -110,7 +133,7 @@ Write-Host '  Buzz OAuth 2.0 Application Setup (PowerShell)'
 Write-Host '=========================================================='
 
 Write-BuzzSection 'Step 1: Buzz Server URL'
-if (-not $ServerUrl) { $ServerUrl = Read-BuzzRequired -Label 'Buzz API server URL (e.g. https://api.agilixbuzz.com)' -EnvVar 'BUZZ_SERVER_URL' }
+if (-not $ServerUrl) { $ServerUrl = Read-BuzzRequired -Label 'Buzz API server URL (e.g. https://backgroundapi.agilixbuzz.com)' -EnvVar 'BUZZ_SERVER_URL' }
 $server = $ServerUrl.TrimEnd('/')
 Write-Host "  Server: $server"
 

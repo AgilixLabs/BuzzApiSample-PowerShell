@@ -63,8 +63,14 @@ if ($oauthKid) {
 
 Write-Host ("`n-- Deleting Application Identity account (userid: {0}) --" -f $oauthUserId)
 $resp = Invoke-BuzzCmdPost -Server $server -Cmd 'deleteusers' -Body @{ requests = @{ user = @(@{ userid = $oauthUserId }) } } -Token $adminToken
-if ((Get-BuzzResponseCode $resp) -eq 'OK') { Write-Host 'Application Identity account deleted.' }
-else { [Console]::Error.WriteLine("Warning: delete returned code `"$(Get-BuzzResponseCode $resp)`". Continuing.") }
+# The per-user outcome is authoritative.  The OUTER code is OK whenever the request was
+# merely well formed, so checking it first would report success for a delete that was
+# actually denied or whose target did not exist.
+$delItem = Get-BuzzItemResult $resp
+$delCode = if ($delItem.code) { $delItem.code } else { Get-BuzzResponseCode $resp }
+$delDetail = if ($delItem.message) { " - $($delItem.message)" } else { '' }
+if ($delCode -eq 'OK') { Write-Host 'Application Identity account deleted.' }
+else { [Console]::Error.WriteLine("Warning: delete returned code `"$delCode`"$delDetail. Continuing.") }
 
 Write-Host "`n-- Removing local files --------------------------------"
 $keyDir = if ($privateKeyPath) { Split-Path -Parent $privateKeyPath } else { Split-Path -Parent $PSScriptRoot }

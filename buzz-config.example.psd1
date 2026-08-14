@@ -7,7 +7,7 @@
 
 @{
     # Buzz API server URL (no trailing slash).
-    ServerUrl              = 'https://api.agilixbuzz.com'
+    ServerUrl              = 'https://backgroundapi.agilixbuzz.com'
 
     # Included in the User-Agent header so Agilix support can identify your integration.
     ContactInformation     = '+https://example.com/; admin@example.com'

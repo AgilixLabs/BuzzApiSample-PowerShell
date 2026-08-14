@@ -35,7 +35,7 @@ try {
     Write-Host ("  Private key : {0}" -f $paths[0])
     Write-Host ("  Public key  : {0}" -f $paths[1])
     Write-Host "`nNext step: register the public key with Buzz."
-    Write-Host '  .\scripts\Register-BuzzOAuthKey.ps1 -ServerUrl https://api.agilixbuzz.com -UserId <userid> -Kid <kid> -PublicKeyPath public_key.pem'
+    Write-Host '  .\scripts\Register-BuzzOAuthKey.ps1 -ServerUrl https://backgroundapi.agilixbuzz.com -UserId <userid> -Kid <kid> -PublicKeyPath public_key.pem'
     Write-Host "`nIMPORTANT: Never commit private_key.pem to source control."
 }
 catch {
