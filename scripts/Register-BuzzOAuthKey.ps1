@@ -8,7 +8,7 @@
     PUTting an existing kid REPLACES the key immediately — use a new kid to rotate.
 
 .EXAMPLE
-    .\scripts\Register-BuzzOAuthKey.ps1 -ServerUrl https://api.agilixbuzz.com -UserId 12345678 -Kid 2025-q2 -PublicKeyPath public_key.pem
+    .\scripts\Register-BuzzOAuthKey.ps1 -ServerUrl https://backgroundapi.agilixbuzz.com -UserId 12345678 -Kid 2025-q2 -PublicKeyPath public_key.pem
 #>
 [CmdletBinding()]
 param(

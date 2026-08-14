@@ -54,8 +54,9 @@ Write-Host '-- getuser2 (verify authentication) --------------------'
 $userNode = $client.VerifyResponse($client.JsonRequest('GET', 'getuser2', $null, $null, $true), $true)
 $user = $userNode.user
 
-# This server returns the identifier as "id"; older servers use "userid".
-$userId = Get-Value $user @('userid', 'id')
+# The User schema names this "id".  ("userid" is the CreateUsers2 *response* field
+# for a newly created user - a different command, not an alias here.)
+$userId = Get-Value $user @('id')
 $domainId = Get-Value $user @('domainid')
 & $logger 'info' ("Authenticated as user {0} (`"{1} {2}`", userid: {3})" -f $user.username, $user.firstname, $user.lastname, $userId)
 & $logger 'info' ("Home domain: {0}" -f $domainId)
