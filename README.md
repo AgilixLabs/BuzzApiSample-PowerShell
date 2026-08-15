@@ -70,7 +70,7 @@ format, loaded with the built-in `Import-PowerShellDataFile`. Copy `buzz-config.
 
 ```powershell
 @{
-    ServerUrl              = 'https://api.agilixbuzz.com'
+    ServerUrl              = 'https://backgroundapi.agilixbuzz.com'
     ContactInformation     = '+https://example.com/; admin@example.com'
     ApplicationInformation = 'MyApp'
     OAuthUserId            = '12345678'
@@ -132,7 +132,7 @@ Choose a **Key ID** (`kid`), e.g. `2025-q2`. Allowed characters: ASCII letters, 
 
 ```powershell
 .\scripts\Register-BuzzOAuthKey.ps1 `
-    -ServerUrl https://api.agilixbuzz.com `
+    -ServerUrl https://backgroundapi.agilixbuzz.com `
     -UserId 12345678 `
     -Kid 2025-q2 `
     -PublicKeyPath public_key.pem
@@ -157,7 +157,7 @@ Create `buzz-config.psd1` (see Configuration above) or run `.\scripts\Run-BuzzSa
 Import-Module .\BuzzApiClient.psm1
 
 $client = New-BuzzApiClientFromPem `
-    -ServerUrl 'https://api.agilixbuzz.com' `
+    -ServerUrl 'https://backgroundapi.agilixbuzz.com' `
     -UserAgent 'MyApp/1.0 (PowerShell; MyApp; admin@example.com)' `
     -OAuthUserId '12345678' `
     -OAuthKid '2025-q2' `
@@ -170,7 +170,7 @@ $domain = $client.VerifyResponse($client.JsonRequest('GET', 'getdomain2', @{ dom
 
 `JsonRequest(method, cmd, params, jsonBody, includeToken)` returns the parsed response (as a
 `PSCustomObject`). `VerifyResponse(node, checkChildResponses)` throws unless `response.code`
-equals `OK` (and recursively checks child responses from batch APIs).
+equals `OK` (and recursively checks child responses from multi-object commands such as CreateUsers2).
 
 ---
 
