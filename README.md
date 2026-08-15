@@ -201,3 +201,59 @@ outstanding tokens (`POST {server}/api/oauth/revoke` with form body `token=<acce
 | `Could not create SSL/TLS secure channel` (Windows PowerShell 5.1) | Server requires a TLS version not enabled. | The client enables TLS 1.2/1.3 automatically; ensure you are on Windows PowerShell 5.1 with .NET Framework 4.8+ on a current Windows build. |
 | HTTP 400 registering a key | Wrong PEM format or key too small. | Use an SPKI PEM (`-----BEGIN PUBLIC KEY-----`), minimum 2048 bits. |
 | HTTP 401/403 registering a key | Admin token lacks Update User rights. | Use an admin with the Update User right on the account. |
+
+---
+
+## Multi-factor authentication
+
+MFA affects only the **administrator login** that `.\scripts\Setup-BuzzOAuth.ps1` and `.\scripts\Cleanup-BuzzSample.ps1` use to
+create the Application Identity account and register its key. It does **not** affect the
+sample or your integration.
+
+An [Application Identity account](https://api.agilixbuzz.com/docs/entry/Concept/OAuth.md)
+authenticates with a signed JWT assertion instead of a password, and cannot be logged into
+interactively at all. The API reference makes the consequence explicit: OAuth *"works in
+domains where MFA is required for administrative accounts, since it authenticates via
+signed JWT assertions rather than a username and
+password"* ([Login3](https://api.agilixbuzz.com/docs/entry/Command/Login3.md)). So an
+integration built on this sample keeps running unattended in a domain that requires MFA of
+every administrator — which is a large part of why OAuth is preferred over the legacy
+`login3` flow.
+
+### What the setup script does
+
+When the admin account has a second factor configured,
+[`login3`](https://api.agilixbuzz.com/docs/entry/Command/Login3.md) answers
+`SecondFactorRequired` and returns a short-lived token. The script prompts for the
+one-time code and presents both to
+[`secondfactorauthenticate`](https://api.agilixbuzz.com/docs/entry/Command/SecondFactorAuthenticate.md),
+which returns the real session token. That short-lived token is sent in an
+`Authorization: Bearer` header — it is ignored if placed in the request body.
+
+### Running unattended
+
+Every prompt falls back to an environment variable, including the one-time code:
+
+| Variable | Meaning |
+|---|---|
+| `BUZZ_ADMIN_USERNAME` | Admin login, as `userspace/username` |
+| `BUZZ_ADMIN_PASSWORD` | Admin password |
+| `BUZZ_ADMIN_MFA` | One-time code, when the account has MFA |
+
+A TOTP code is valid for about 30 seconds, so `BUZZ_ADMIN_MFA` only helps where something
+can generate a current code at run time (a CI secret store, or a TOTP library seeded with
+the shared secret). For a one-off run, leave it unset and type the code when prompted.
+
+Note that this applies to *setup* only. Once setup has written the configuration, the
+sample authenticates via OAuth and needs no human involvement of any kind.
+
+### Troubleshooting the setup login
+
+| Code shown by the setup script | Meaning | Fix |
+|---|---|---|
+| `SecondFactorRequired` | The password was correct and the account has MFA enabled. | Expected — the script prompts for the one-time code and completes the login. |
+| `SecondFactorConfigurationNowRequired` | The domain's password policy now requires MFA, but this account has not configured it. | Sign in to Buzz with the account, finish MFA setup, then re-run. |
+| `InvalidCredentials` | Wrong username or password. | The username must be `userspace/username`, e.g. `myschool/admin`. |
+| `AccountLockout` | Too many failed password attempts. | An administrator must unlock the account. |
+| `PasswordExpired` | The password expired under the domain's password policy. | Change the password in Buzz, then re-run. |
+| `LoginMethodNotAllowed` | The account does not permit password login (SSO-only, for example). | Use a different admin account for setup. |
