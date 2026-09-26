@@ -404,14 +404,15 @@ class BuzzApiClient {
         $retriesRemaining = $script:RetriesToMake
         $baseWait = $script:InitialWaitMs
         while ($true) {
-            # Build a fresh assertion on every attempt: JWTs expire in 2 minutes and a long
-            # Retry-After backoff can push a reused assertion past its exp claim.
+            # Wait out any throttle window first, then build a fresh assertion on every attempt:
+            # JWTs expire in 2 minutes and a throttle wait can be up to 10, so an assertion built
+            # before the wait (or reused) could be past its exp claim.
+            $this.WaitForThrottleWindow()
             $assertion = $this.BuildClientAssertion()
             $form = 'grant_type=client_credentials' +
             '&client_assertion_type=' + [Uri]::EscapeDataString('urn:ietf:params:oauth:client-assertion-type:jwt-bearer') +
             '&client_assertion=' + [Uri]::EscapeDataString($assertion)
 
-            $this.WaitForThrottleWindow()
             $resp = Invoke-BuzzHttp -Method 'POST' -Url $this.TokenEndpoint -Body $form `
                 -Headers @{ 'User-Agent' = $this.UserAgent; 'Content-Type' = 'application/x-www-form-urlencoded' } `
                 -TimeoutSec $this.TimeoutSec
