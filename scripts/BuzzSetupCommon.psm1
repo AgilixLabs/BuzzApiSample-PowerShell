@@ -17,6 +17,8 @@ $script:Root = Split-Path -Parent $PSScriptRoot
 Import-Module (Join-Path $script:Root 'BuzzHttp.psm1') -Force
 Import-Module (Join-Path $script:Root 'BuzzCrypto.psm1') -Force
 Import-Module (Join-Path $script:Root 'BuzzConfig.psm1') -Force
+# Only for Assert-BuzzServerUrl, which refuses a deprecated endpoint host name.
+Import-Module (Join-Path $script:Root 'BuzzApiClient.psm1') -Force
 
 # ── Console output ─────────────────────────────────────────────────────────────
 function Write-BuzzSection { param([string]$Title) Write-Host ("`n--- {0} {1}" -f $Title, ('-' * [Math]::Max(0, 50 - $Title.Length))) }
@@ -83,7 +85,9 @@ function Invoke-BuzzCmdPost {
     $json = $Body | ConvertTo-Json -Depth 10 -Compress
     $resp = Invoke-BuzzHttp -Method 'POST' -Url $url -Body $json `
         -Headers (Get-BuzzAuthHeaders -Token $Token -Extra @{ 'Content-Type' = 'application/json' })
-    return (ConvertFrom-BuzzJsonSafe $resp.Body)
+    $node = ConvertFrom-BuzzJsonSafe $resp.Body
+    Stop-BuzzIfDeprecated $node
+    return $node
 }
 
 function Invoke-BuzzCmdGet {
@@ -93,7 +97,32 @@ function Invoke-BuzzCmdGet {
     $url = "$Server/cmd/$Cmd"
     if ($pairs.Count -gt 0) { $url += '?' + ($pairs -join '&') }
     $resp = Invoke-BuzzHttp -Method 'GET' -Url $url -Headers (Get-BuzzAuthHeaders -Token $Token)
-    return (ConvertFrom-BuzzJsonSafe $resp.Body)
+    $node = ConvertFrom-BuzzJsonSafe $resp.Body
+    Stop-BuzzIfDeprecated $node
+    return $node
+}
+
+# Buzz refuses a deprecated command, endpoint host name or sign-in for new users and
+# domains (code ApiDeprecated, on the response or on an item of a multi-object command).
+# Trying again cannot help, so stop and show the server's message, which says what to
+# use instead.
+function Stop-BuzzIfDeprecated {
+    param($Resp)
+    $message = $null
+    if ((Get-BuzzResponseCode $Resp) -eq 'ApiDeprecated') { $message = Get-BuzzResponseMessage $Resp }
+    else {
+        $item = Get-BuzzItemResult $Resp
+        if ($item.code -ne 'ApiDeprecated') { return }
+        $message = $item.message
+    }
+    if (-not $message) { $message = 'Buzz refused this request because it uses a deprecated API.' }
+    Stop-Buzz $message
+}
+
+# Refuses a deprecated endpoint host name (api.agilixbuzz.com) up front.
+function Assert-BuzzSetupServerUrl {
+    param([string]$Server)
+    try { [void](Assert-BuzzServerUrl $Server) } catch { Stop-Buzz $_.Exception.Message }
 }
 
 function Register-BuzzPublicKey {
@@ -181,11 +210,16 @@ function Get-BuzzResponseMessage {
 # ── Admin login (login3, with optional MFA) ─────────────────────────────────────
 function Get-BuzzAdminToken {
     param([string]$Server)
+    # Refuse a deprecated endpoint host name before asking for a password.
+    Assert-BuzzSetupServerUrl $Server
+
     while ($true) {
         $username = Read-BuzzAdminUsername
         $password = Read-BuzzPassword -Label 'Admin password' -EnvVar 'BUZZ_ADMIN_PASSWORD'
 
         Write-Host 'Logging in...' -NoNewline
+        # An ApiDeprecated answer (from login3 or secondfactorauthenticate) stops the script
+        # inside Invoke-BuzzCmdPost rather than looping back to ask for credentials again.
         $resp = Invoke-BuzzCmdPost -Server $Server -Cmd 'login3' -Body @{ request = @{ cmd = 'login3'; username = $username; password = $password } }
         $code = Get-BuzzResponseCode $resp
 
@@ -194,8 +228,8 @@ function Get-BuzzAdminToken {
         # short-lived token that is presented in an Authorization: Bearer header to
         # secondfactorauthenticate, which returns the real session token.  Putting the
         # token in the request body instead is ignored: AccessDenied userId='-1'.
-        #   https://api.agilixbuzz.com/docs/entry/Command/Login3.md
-        #   https://api.agilixbuzz.com/docs/entry/Command/SecondFactorAuthenticate.md
+        #   https://interactiveapi.agilixbuzz.com/docs/entry/Command/Login3.md
+        #   https://interactiveapi.agilixbuzz.com/docs/entry/Command/SecondFactorAuthenticate.md
         if ($code -eq 'SecondFactorConfigurationNowRequired') {
             Write-Host "`n  This account must configure multi-factor authentication before it can"
             Write-Host '  be used.  Complete MFA setup in Buzz, then re-run this script.'
@@ -264,5 +298,5 @@ Export-ModuleMember -Function Write-BuzzSection, Write-BuzzInfo, Stop-Buzz,
 Read-BuzzRequired, Read-BuzzOptional, Read-BuzzPassword, Confirm-Buzz,
 Invoke-BuzzCmdPost, Invoke-BuzzCmdGet, Register-BuzzPublicKey, Remove-BuzzPublicKey,
 Get-BuzzProp, Get-BuzzResponseCode, Get-BuzzResponseMessage, Get-BuzzItemResult,
-Get-BuzzSecondFactorToken, Get-BuzzAdminToken, New-BuzzKeyPair,
+Get-BuzzSecondFactorToken, Get-BuzzAdminToken, New-BuzzKeyPair, Assert-BuzzSetupServerUrl,
 Get-BuzzConfigPath, Import-BuzzConfig, Export-BuzzConfig, Test-BuzzConfigComplete

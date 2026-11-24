@@ -48,7 +48,7 @@ function Get-BuzzDomains {
     # answered "Unknown API command", so this silently returned @() on every run.
     # domainid=0 means "every domain this account has ReadDomain rights on"; limit=0
     # lifts the default 100-domain cap (capped server-side at 1000 for domainid=0).
-    #   https://api.agilixbuzz.com/docs/entry/Command/ListDomains.md
+    #   https://interactiveapi.agilixbuzz.com/docs/entry/Command/ListDomains.md
     $resp = Invoke-BuzzCmdGet -Server $Server -Cmd 'listdomains' -Params @{ domainid = 0; limit = 0 } -Token $Token
     if ((Get-BuzzResponseCode $resp) -ne 'OK') { return @() }
     # When the account can read no domains the server answers OK with "domains":{},
@@ -135,6 +135,7 @@ Write-Host '=========================================================='
 Write-BuzzSection 'Step 1: Buzz Server URL'
 if (-not $ServerUrl) { $ServerUrl = Read-BuzzRequired -Label 'Buzz API server URL (e.g. https://backgroundapi.agilixbuzz.com)' -EnvVar 'BUZZ_SERVER_URL' }
 $server = $ServerUrl.TrimEnd('/')
+Assert-BuzzSetupServerUrl $server
 Write-Host "  Server: $server"
 
 Write-BuzzSection 'Step 2: Admin Login'

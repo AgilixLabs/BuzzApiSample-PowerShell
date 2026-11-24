@@ -15,6 +15,12 @@
 #>
 
 $ErrorActionPreference = 'Stop'
+
+# Replace YOUR_APPLICATION_NAME with your application's name and version, such as 'AcmeRosterSync/1.0'.
+# It is how Agilix support identifies your integration. Do not include the word "Buzz": a User-Agent
+# containing it is treated as one of Agilix's own applications.
+$applicationName = YOUR_APPLICATION_NAME
+
 Import-Module "$PSScriptRoot\BuzzApiClient.psm1" -Force
 Import-Module "$PSScriptRoot\BuzzConfig.psm1" -Force
 
@@ -27,7 +33,7 @@ function Get-Value($Obj, [string[]]$Names) {
 }
 
 $config = Import-BuzzConfig
-$userAgent = "BuzzApiClient/1.0.0 (PowerShell; $($config.ApplicationInformation); $($config.ContactInformation))"
+$userAgent = "$applicationName (PowerShell; $($config.ApplicationInformation); $($config.ContactInformation))"
 
 # Show info/warn/error; suppress debug tracing for a clean demo.
 $logger = {

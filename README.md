@@ -36,6 +36,8 @@ The sample is intentionally read-only — it can be run repeatedly without modif
 - Retrying transient failures with exponential backoff (1 s → 64 s, up to 5 retries).
 - Handling throttling (rate limits, time limits, backend pressure) — see
   [Throttling and backend pressure](#throttling-and-backend-pressure).
+- Refusing a deprecated endpoint up front and never retrying a request Buzz refuses as deprecated —
+  see [Endpoints and deprecations](#endpoints-and-deprecations).
 - Providing `.JsonRequest()` and `.VerifyResponse()` methods for common JSON API patterns.
 
 ### Throttling and backend pressure
@@ -115,9 +117,36 @@ format, loaded with the built-in `Import-PowerShellDataFile`. Copy `buzz-config.
 }
 ```
 
+### Endpoints and deprecations
+
+Use `https://backgroundapi.agilixbuzz.com` for background processing (the default here), or the
+interactive endpoint (`https://interactiveapi.agilixbuzz.com`) for requests a user is waiting on. **Do not use `api.agilixbuzz.com`**: it is
+deprecated for integrations, Buzz refuses it for new users and domains, and `BuzzApiClient` and the
+setup scripts refuse it up front with a message saying what to use instead. (`Assert-BuzzServerUrl`,
+exported from `BuzzApiClient.psm1`, is that check, if you want to validate a `ServerUrl` yourself.)
+
+Buzz retires deprecated parts of its API for users and domains created after each deprecation is
+enforced, and answers such a request with the code `ApiDeprecated` and a message naming the
+replacement. That covers obsolete commands (for example `GetUser`, replaced by `GetUser2`), the
+`api.agilixbuzz.com` endpoint, and using a password (`Login3`) session for integration work.
+`BuzzApiClient` throws `BuzzApiDeprecatedException` for it and never retries. Like
+`BuzzApiThrottledException`, it derives from `System.Management.Automation.RuntimeException`, so
+existing `catch` blocks still catch it. This sample already uses
+only what is supported: OAuth for every API call, and `Login3` only in the setup and cleanup scripts,
+for the brief administrator sign-in that creates the Application Identity account. See
+[API Deprecation](https://interactiveapi.agilixbuzz.com/docs/entry/Concept/ApiDeprecation.md) in the
+Buzz API documentation.
+
 ---
 
 ## Quickest start
+
+**First, name your application.** Set `YOUR_APPLICATION_NAME` in `sample.ps1` to your application's
+name and version, such as `AcmeRosterSync/1.0`; until you do, the sample stops at start when run on
+its own. It goes in the User-Agent header, where Agilix support uses it to identify your
+integration. Do not include the word "Buzz": a User-Agent containing it is treated as one of
+Agilix's own applications. The quick start below runs the sample under a temporary name for you,
+without changing that file; set your own before using the code anywhere else.
 
 ### Run (setup + demo in one command)
 
@@ -237,6 +266,7 @@ outstanding tokens (`POST {server}/api/oauth/revoke` with form body `token=<acce
 | `Could not create SSL/TLS secure channel` (Windows PowerShell 5.1) | Server requires a TLS version not enabled. | The client enables TLS 1.2/1.3 automatically; ensure you are on Windows PowerShell 5.1 with .NET Framework 4.8+ on a current Windows build. |
 | HTTP 400 registering a key | Wrong PEM format or key too small. | Use an SPKI PEM (`-----BEGIN PUBLIC KEY-----`), minimum 2048 bits. |
 | HTTP 401/403 registering a key | Admin token lacks Update User rights. | Use an admin with the Update User right on the account. |
+| `BuzzApiDeprecatedException` / `ApiDeprecated` / `unauthorized_client` | The request used a deprecated command or the `api.agilixbuzz.com` endpoint, and the user or domain is too new to be allowed it. | Do what the message says: switch to the named replacement or endpoint. Do not retry. |
 
 ---
 
@@ -246,12 +276,12 @@ MFA affects only the **administrator login** that `.\scripts\Setup-BuzzOAuth.ps1
 create the Application Identity account and register its key. It does **not** affect the
 sample or your integration.
 
-An [Application Identity account](https://api.agilixbuzz.com/docs/entry/Concept/OAuth.md)
+An [Application Identity account](https://interactiveapi.agilixbuzz.com/docs/entry/Concept/OAuth.md)
 authenticates with a signed JWT assertion instead of a password, and cannot be logged into
 interactively at all. The API reference makes the consequence explicit: OAuth *"works in
 domains where MFA is required for administrative accounts, since it authenticates via
 signed JWT assertions rather than a username and
-password"* ([Login3](https://api.agilixbuzz.com/docs/entry/Command/Login3.md)). So an
+password"* ([Login3](https://interactiveapi.agilixbuzz.com/docs/entry/Command/Login3.md)). So an
 integration built on this sample keeps running unattended in a domain that requires MFA of
 every administrator — which is a large part of why OAuth is preferred over the legacy
 `login3` flow.
@@ -259,10 +289,10 @@ every administrator — which is a large part of why OAuth is preferred over the
 ### What the setup script does
 
 When the admin account has a second factor configured,
-[`login3`](https://api.agilixbuzz.com/docs/entry/Command/Login3.md) answers
+[`login3`](https://interactiveapi.agilixbuzz.com/docs/entry/Command/Login3.md) answers
 `SecondFactorRequired` and returns a short-lived token. The script prompts for the
 one-time code and presents both to
-[`secondfactorauthenticate`](https://api.agilixbuzz.com/docs/entry/Command/SecondFactorAuthenticate.md),
+[`secondfactorauthenticate`](https://interactiveapi.agilixbuzz.com/docs/entry/Command/SecondFactorAuthenticate.md),
 which returns the real session token. That short-lived token is sent in an
 `Authorization: Bearer` header — it is ignored if placed in the request body.
 
@@ -293,3 +323,9 @@ sample authenticates via OAuth and needs no human involvement of any kind.
 | `AccountLockout` | Too many failed password attempts. | An administrator must unlock the account. |
 | `PasswordExpired` | The password expired under the domain's password policy. | Change the password in Buzz, then re-run. |
 | `LoginMethodNotAllowed` | The account does not permit password login (SSO-only, for example). | Use a different admin account for setup. |
+| `ApiDeprecated` | The server URL is a deprecated endpoint (`api.agilixbuzz.com`) and the account or its domain is too new to use it. | Re-run with `https://backgroundapi.agilixbuzz.com` as the server URL. |
+
+## Maintainers
+
+`pwsh -File scripts/Test-BuzzSample.ps1` builds and tests the sample under a placeholder
+application name without changing the entry point (see the script header for why).

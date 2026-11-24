@@ -8,6 +8,10 @@
     transient failures with exponential backoff, and handles throttling and backend
     pressure (HTTP 429/503 or a throttle code in the response envelope).
 
+    A deprecated endpoint host name (api.agilixbuzz.com) is refused when the client is
+    created, and a request Buzz refuses as deprecated (code "ApiDeprecated") throws
+    BuzzApiDeprecatedException and is never retried.
+
     Works on Windows PowerShell 5.1 and PowerShell 7+. No external dependencies.
 
     Create a client with New-BuzzApiClientFromPem (or New-BuzzApiClient), then call
@@ -36,6 +40,16 @@ $script:NoRetryStatus = @(400, 401, 402, 403, 404, 405, 406, 407, 409, 410, 411,
 # "Service Unavailable" is the code written when the server sheds load before a request is authenticated.
 $script:ThrottleCodes = @('TooManyRequests', 'RetryLater', 'LimitExceeded', 'RateLimit', 'TimeLimit',
     'ServerOverwhelmed', 'BackendPressure', 'Service Unavailable', 'ServiceUnavailable')
+
+# The original, single API endpoint. It is deprecated for integrations: Buzz refuses it (code
+# "ApiDeprecated") for users and domains created after the deprecation was enforced. Use the
+# background endpoint for background processing, or the interactive endpoint for requests a user
+# is waiting on.
+#   https://interactiveapi.agilixbuzz.com/docs/entry/Concept/ApiDeprecation.md
+$script:LegacyApiHosts = @('api.agilixbuzz.com')
+# The response code Buzz gives a request that used a deprecated command, endpoint host name or
+# kind of sign-in. It is never worth retrying.
+$script:DeprecatedCode = 'ApiDeprecated'
 
 # Thrown when the server throttles a request (rate limit, time limit, or backend pressure) and the
 # client has run out of retries, or when items in a batch or multi-object request were throttled.
@@ -73,6 +87,41 @@ public class BuzzApiThrottledException : RuntimeException
         Response = response;
         ThrottledItemIndexes = throttledItemIndexes ?? new int[0];
         RetryAfter = retryAfter;
+        StatusCode = statusCode;
+    }
+}
+'@
+}
+
+# Thrown when Buzz refuses a request because it used something deprecated (response code
+# "ApiDeprecated", or "unauthorized_client" from the OAuth token endpoint). Deprecated commands, the
+# api.agilixbuzz.com endpoint and password (Login3) sessions for integration work keep working for
+# existing users and domains, but are refused for new ones. The message is the server's own and says
+# what to use instead. Never retry: the request is refused until the code is changed.
+# Like BuzzApiThrottledException it is a real .NET type deriving from RuntimeException, so callers
+# can `catch [BuzzApiDeprecatedException]` and existing catch blocks still catch it.
+if (-not ('BuzzApiDeprecatedException' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Management.Automation;
+
+public class BuzzApiDeprecatedException : RuntimeException
+{
+    // "ApiDeprecated", or the OAuth error code ("unauthorized_client") from the token endpoint.
+    public string Code { get; private set; }
+
+    // The HTTP status of a refused OAuth token request (400). 0 when the refusal came in a
+    // response envelope, which the server sends with HTTP 200.
+    public int StatusCode { get; private set; }
+
+    // The full response envelope, including the results of any batch items that were not refused. Null for a token request.
+    public object Response { get; private set; }
+
+    public BuzzApiDeprecatedException(string message, string code, object response, int statusCode)
+        : base(message)
+    {
+        Code = code;
+        Response = response;
         StatusCode = statusCode;
     }
 }
@@ -206,6 +255,14 @@ function New-BuzzThrottledException {
     return ('BuzzApiThrottledException' -as [type])::new($Message, $codeText, $Response, $ThrottledItemIndexes, $retryAfter, $StatusCode)
 }
 
+function New-BuzzDeprecatedException {
+    # A function for the same reason as New-BuzzThrottledException.
+    param([string]$Message, $Code, $Response = $null, [int]$StatusCode = 0)
+    $codeText = $null
+    if ($null -ne $Code) { $codeText = [string]$Code }
+    return ('BuzzApiDeprecatedException' -as [type])::new($Message, $codeText, $Response, $StatusCode)
+}
+
 function Test-BuzzStatusRetryable {
     param([int]$Status)
     return -not ($script:NoRetryStatus -contains $Status)
@@ -309,7 +366,7 @@ class BuzzApiClient {
         if ([string]::IsNullOrEmpty($oauthKid)) { throw 'oauthKid is required' }
         if ($null -eq $privateKey) { throw 'privateKey is required' }
 
-        $this.ServerUrl = $serverUrl.Trim().TrimEnd('/')
+        $this.ServerUrl = Assert-BuzzServerUrl $serverUrl
         $this.UserAgent = $userAgent
         $this.OAuthUserId = $oauthUserId
         $this.OAuthKid = $oauthKid
@@ -335,7 +392,10 @@ class BuzzApiClient {
 
         # If the token expired or was revoked, re-authenticate and retry once. REST-style endpoints
         # report this as HTTP 401, possibly with no envelope; commands report code "NoAuthentication".
-        $authRejected = ($result.StatusCode -eq 401) -or ((Get-BuzzResponseCode $node) -eq 'NoAuthentication')
+        # A deprecation refusal is never retried, whatever HTTP status carries it.
+        $deprecated = (Get-BuzzResponseCode $node) -eq $script:DeprecatedCode
+        $authRejected = (-not $deprecated) -and
+        (($result.StatusCode -eq 401) -or ((Get-BuzzResponseCode $node) -eq 'NoAuthentication'))
         if ($includeToken -and $this.Token -and $authRejected) {
             $this.Log('debug', 'Re-authenticating because the request returned code "NoAuthentication"')
             $this.AuthenticateOAuth()
@@ -343,7 +403,7 @@ class BuzzApiClient {
             $node = $result.Envelope
             $this.TraceResponse($node)
         }
-        if ($result.StatusCode -eq 401) { throw "Request to $($result.Target) failed: HTTP 401" }
+        if ($result.StatusCode -eq 401 -and -not $deprecated) { throw "Request to $($result.Target) failed: HTTP 401" }
         return $node
     }
 
@@ -363,6 +423,12 @@ class BuzzApiClient {
             if (Test-BuzzThrottleCode $code) {
                 throw (New-BuzzThrottledException -Message "Buzz API call was throttled ($code): $redacted" -Code $code `
                         -Response $responseJson -StatusCode (Get-BuzzThrottleStatus 200 $code))
+            }
+            # Also reached for an item of a batch or multi-object command, through the recursion below.
+            if ($code -eq $script:DeprecatedCode) {
+                $message = Get-BuzzProp $toVerify 'message'
+                $detail = if ($message) { $message } else { $redacted }
+                throw (New-BuzzDeprecatedException -Message "Buzz refused a deprecated API: $detail" -Code $code -Response $responseJson)
             }
             throw "Buzz API call failed. Expected response.code to be OK, found: $redacted"
         }
@@ -427,7 +493,8 @@ class BuzzApiClient {
             if ($resp.StatusCode -lt 200 -or $resp.StatusCode -ge 300) {
                 # The token endpoint answers with RFC 6749 errors rather than the DLAP envelope:
                 # rate limits and backend pressure are 429/503 with error "temporarily_unavailable" and Retry-After.
-                $oauthError = Get-BuzzProp (ConvertFrom-BuzzEnvelope $resp.Body $resp.Headers['content-type'] -Lenient) 'error'
+                $errorJson = ConvertFrom-BuzzEnvelope $resp.Body $resp.Headers['content-type'] -Lenient
+                $oauthError = Get-BuzzProp $errorJson 'error'
                 if ($resp.StatusCode -eq 429 -or $resp.StatusCode -eq 503 -or $oauthError -eq 'temporarily_unavailable') {
                     $serverWait = Get-BuzzServerDirectedWaitMs $resp.Headers
                     $wait = Get-BuzzThrottleWaitMs $serverWait $baseWait
@@ -440,6 +507,15 @@ class BuzzApiClient {
                     $this.ExtendThrottleWindow([Math]::Min($wait, $script:MaxServerDirectedWaitMs))
                     throw (New-BuzzThrottledException -Message "OAuth token request was throttled (HTTP $($resp.StatusCode)): $($resp.Body)" `
                             -Code $oauthError -Response $null -RetryAfterMs $serverWait -StatusCode (Get-BuzzThrottleStatus $resp.StatusCode $null))
+                }
+                # The token endpoint reports a deprecated endpoint host name in the OAuth error
+                # format. Retrying cannot help.
+                if ($oauthError -eq 'unauthorized_client') {
+                    $this.Log('error', "OAuth token request failed: $($resp.StatusCode) $($resp.Body)")
+                    $description = Get-BuzzProp $errorJson 'error_description'
+                    $detail = if ($description) { $description } else { $resp.Body }
+                    throw (New-BuzzDeprecatedException -Message "Buzz refused the OAuth token request: $detail" `
+                            -Code $oauthError -StatusCode $resp.StatusCode)
                 }
                 if ($retriesRemaining -gt 0 -and (Test-BuzzStatusRetryable $resp.StatusCode)) {
                     Start-Sleep -Milliseconds (Get-BuzzWaitFromRetryHeader $resp.Headers['retry-after'] $baseWait)
@@ -560,6 +636,12 @@ class BuzzApiClient {
                         -Code $code -Response $envelope -RetryAfterMs $serverWait -StatusCode (Get-BuzzThrottleStatus $resp.StatusCode $code))
             }
 
+            # A deprecation refusal is returned as it is, whatever the HTTP status, and never retried:
+            # the request is refused until the code is changed. VerifyResponse throws for it.
+            if ($code -eq $script:DeprecatedCode) {
+                return [pscustomobject]@{ StatusCode = $resp.StatusCode; Envelope = $envelope; Target = $target }
+            }
+
             if ($isSuccess) {
                 $this.ExtendThrottleWindowForThrottledItems($envelope, $resp.Headers)
                 return [pscustomobject]@{ StatusCode = $resp.StatusCode; Envelope = $envelope; Target = $target }
@@ -636,6 +718,32 @@ class BuzzApiClient {
     }
 }
 
+# ── Server URL check (public API) ──────────────────────────────────────────────
+function Assert-BuzzServerUrl {
+    <#
+    .SYNOPSIS
+        Returns the server URL trimmed, refusing a deprecated endpoint host name.
+    .DESCRIPTION
+        Throws a System.ArgumentException if the URL names a deprecated host (api.agilixbuzz.com).
+        The client calls this when it is created; the setup scripts call it before asking for a password.
+    #>
+    [OutputType([string])]
+    param([AllowEmptyString()][AllowNull()][string]$ServerUrl)
+    $url = ([string]$ServerUrl).Trim().TrimEnd('/')
+    $candidate = if ($url.Contains('://')) { $url } else { "https://$url" }
+    $uri = $null
+    $hostName = ''
+    if ([Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$uri)) { $hostName = $uri.Host.TrimEnd('.').ToLowerInvariant() }
+    if ($script:LegacyApiHosts -contains $hostName) {
+        throw [System.ArgumentException]::new(
+            "$hostName is deprecated for API integrations, and Buzz refuses it for new users and domains. " +
+            'Use the background endpoint (https://backgroundapi.agilixbuzz.com) for background processing, ' +
+            'or the interactive endpoint (https://interactiveapi.agilixbuzz.com) for requests a user is waiting on. ' +
+            "See 'API Deprecation' and 'API Time Limiting' in the Buzz API documentation.")
+    }
+    return $url
+}
+
 # ── Factory functions (public API) ───────────────────────────────────────────────
 function New-BuzzApiClient {
     [OutputType([BuzzApiClient])]
@@ -669,4 +777,4 @@ function New-BuzzApiClientFromPem {
     return [BuzzApiClient]::new($ServerUrl, $UserAgent, $OAuthUserId, $OAuthKid, $rsa, $VerboseLogging, $TimeoutSec, $Logger)
 }
 
-Export-ModuleMember -Function New-BuzzApiClient, New-BuzzApiClientFromPem
+Export-ModuleMember -Function New-BuzzApiClient, New-BuzzApiClientFromPem, Assert-BuzzServerUrl

@@ -23,6 +23,7 @@ $ErrorActionPreference = 'Stop'
 Import-Module "$PSScriptRoot\BuzzSetupCommon.psm1" -Force
 
 $server = $ServerUrl.TrimEnd('/')
+Assert-BuzzSetupServerUrl $server
 if ($Kid -notmatch '^[A-Za-z0-9._-]{1,128}$') {
     Stop-Buzz 'Invalid kid. Allowed: ASCII letters, digits, -, _, .  Max 128 chars.'
 }

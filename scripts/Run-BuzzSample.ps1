@@ -29,4 +29,8 @@ if ($Setup -or -not (Test-BuzzConfigComplete)) {
 }
 
 Write-Host "`n-- Running the sample ----------------------------------"
+# Run under a temporary application name so the quick start works before sample.ps1 is named: this
+# function answers for YOUR_APPLICATION_NAME in the sample's scope, and sample.ps1 is never edited.
+# Set your own name there before using the code anywhere else.
+function YOUR_APPLICATION_NAME { 'QuickStartSample/1.0' }
 & (Join-Path $root 'sample.ps1')
